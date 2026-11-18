@@ -10,7 +10,7 @@
 - [实施任务](specs/003-framework-decision/tasks.md)
 - [运行与切换手册](docs/operations.md)
 
-候选实现包含 QQ 框架、漫漫长夜适配器和离线入口。运行环境需 Node.js 18 或以上。QQ 入口为 `node framework/index.cjs`，默认读取 `private/config/bot.json`。用 `node games/long-night/night-strategist/cli.cjs --help` 查看离线命令。生产切换与验收状态见运行手册。
+当前实现包含 QQ 框架、漫漫长夜适配器和离线入口。运行环境需 Node.js 18 或以上。QQ 入口为 `node framework/index.cjs`，默认读取 `private/config/bot.json`。用 `node games/long-night/night-strategist/cli.cjs --help` 查看离线命令。生产安装、切换与验收记录见运行手册。
 
 ## 迭代
 
