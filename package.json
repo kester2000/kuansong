@@ -1,0 +1,11 @@
+{
+  "name": "kuansong",
+  "version": "0.1.0",
+  "private": true,
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node framework/index.cjs",
+    "test": "node --test tests/*.test.cjs",
+    "test:loop": "node framework/mock.cjs"
+  }
+}

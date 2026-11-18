@@ -1,0 +1,137 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>长夜 Bot 看板</title><link rel="stylesheet" href="/map-assets/tools-map.css"><style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0c1320;color:#e7eef8;font:15px/1.5 system-ui,sans-serif}header{display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:16px 24px}h1{font-size:18px;margin:0}small{color:#9baec6}main{padding:0 24px 24px;max-width:1500px;margin:auto}.maps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}.map-heading{display:flex;align-items:center;justify-content:space-between;margin:8px 0;gap:12px}h2{font-size:16px;margin:0}select{font:inherit;background:#17263a;color:inherit;border:1px solid #29374b;padding:4px 6px;border-radius:3px}.ln-map .collision-edge{box-shadow:0 0 0 2px #ff6b6b;z-index:8}.ln-map .board-wrap{width:100%}.ln-map .cell.block-right{border-right:3px solid #698fa8}.ln-map .cell.block-bottom{border-bottom:3px solid #698fa8}#connection{margin-left:auto;font-size:12px;color:#9baec6}@media(max-width:700px){.maps{grid-template-columns:1fr}header{padding:12px}main{padding:0 12px 12px}}
+.maps.merged{grid-template-columns:minmax(0,760px);justify-content:center}.map-heading{flex-wrap:wrap}</style></head><body><header><h1>长夜 Bot 看板</h1><a href="/history" style="color:#b8d8ff;white-space:nowrap">历史对局</a><select id="session" aria-label="对局"></select><small id="policy"></small><span id="connection">连接中…</span></header><main id="detail" aria-label="本局详情"></main><script>
+let selected=null,state=null,busy=false;const views={};const $=id=>document.getElementById(id);const esc=x=>String(x??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const terrainStyle={EMPTY:['#273747',''],WATER:['#235b80','≈'],GRASS:['#365a3e','♧'],PORTAL:['#634a8a','◎'],EXIT:['#347865','出'],HEAT:['#9b4b35','火'],TRAP:['#705036','陷'],HEART:['#853f59','♥'],ICE:['#4c788d','❄']};
+// DOM grid and wall classes follow long_night_tools renderSingleBoard/blockPreview.
+function mapSvg(cells,n,position,mini=false,marker='我',alignment=null,markers=null,births=null,candidates=[]){
+ const symbols={EMPTY:'·',GRASS:'♧',WATER:'≈',PORTAL:'◎',ONEWAYPORTAL:'◉',EXIT:'↗',TRAP:'⌁',HEAT:'♨',BERRY:'❧',HEART:'♥'};
+ let html='<div class="ln-map"><div class="player-map"><div class="'+(mini?'':'board-wrap')+'"><div role="'+(candidates.length?'group':'img')+'" aria-label="'+(mini?'候选区块图':'推理地图')+'" class="'+(mini?'block-preview':'board')+'" style="grid-template-columns:repeat('+n+',1fr);grid-template-rows:repeat('+n+',1fr)">';
+ for(let r=0;r<n;r++)for(let c=0;c<n;c++){
+  const rr=(r+(alignment?.rowOffset||0))%n,cc=(c+(alignment?.colOffset||0))%n;
+  const cell=cells[rr]?.[cc]||{},types=cell.terrain||[],papa=types.length>1&&types.every(t=>['WATER','PORTAL','ONEWAYPORTAL'].includes(t)),type=types.length===1?types[0]:papa?'PAPA':'UNKNOWN',me=position?.r===rr&&position?.c===cc;
+  let walls='';
+  ['u','d','l','r'].forEach((key,d)=>{
+   const v=cell[key],kind=cell.wallKinds?.[key],door=cell.doors?.[key];
+   const cls=kind===2?'hedge-edge':door?'door-edge door-'+door.state:v==='墙'?'solid-edge':v==='空'?'open-edge':v==='门'?'door-edge door-unknown':null;
+   if(cls)walls+='<i class="wall d'+d+' '+cls+(cell.collisions?.[key]?' collision-edge':'')+'" title="'+esc((cell.collisions?.[key]?'曾发生碰撞':cell.inferred?.[key]?'推定':'观测')+' '+['上','下','左','右'][d]+'：'+(door?'门 '+door.state:kind===2?'树篱':v))+'"></i>';
+  });
+  html+='<span class="'+(mini?'preview-cell':'cell')+' terrain-'+esc(type)+(cell.visited?' visited':'')+(me?' me':'')+(!mini&&c%3===2&&c<n-1?' block-right':'')+(!mini&&r%3===2&&r<n-1?' block-bottom':'')+'" tabindex="0" title="'+esc('行 '+(r+1)+' 列 '+(c+1)+' · '+(cell.heartRoom?'51号 巨大的心房 · ':'')+(types.join('/')||'未知'))+'">';
+  html+=(types.length===1?'<span class="terrain-symbol">'+esc(symbols[type]||'?')+'</span>':papa?'<span class="terrain-possibilities">紫或蓝</span>':'<span class="terrain-possibilities">?</span>');
+  const born=births?births.filter(p=>p.r===rr&&p.c===cc):cell.birth?[{id:marker.replace(/号.*$/,''),label:marker+'出生点'}]:[];
+  if(born.length)html+='<b class="birth-marker" title="'+esc(born.map(p=>p.label).join('、'))+'">'+esc(born.map(p=>p.id).join('·'))+'</b>';
+  if(cell.visited&&!me)html+='<b class="path-dot">•</b>';
+  const occupants=markers?markers.filter(p=>p.r===rr&&p.c===cc):me?[{label:marker}]:[];
+  if(occupants.length)html+=(occupants.filter(p=>(p.kind||'current')==='current').length>1?'<span class="example-player-group">':'')+occupants.map(p=>{
+   const kind=p.kind||'current',icon=kind==='corpse'?'☠':kind==='departure'?'↗':p.tentative?'?':'●';
+   const label=p.projectionLabel||(kind==='corpse'?'尸体位置':kind==='departure'?'历史 / 传送前位置':p.tentative?'按未传送路线暂绘的位置，实际落点待验证':'最新位置');
+   return '<span class="position-marker '+kind+'-marker other-players" title="'+esc((p.id??marker)+'号'+label)+'">'+icon+esc(p.id??marker)+'</span>';
+  }).join('')+(occupants.filter(p=>(p.kind||'current')==='current').length>1?'</span>':'');
+  if(cell.attach==='COIN'||cell.attach==='BUTTON')html+='<b class="preview-attachment attachment-'+cell.attach.toLowerCase()+'" title="'+(cell.attach==='COIN'?'金币（模板初始位置，可能已被拾取）':'按钮')+'"></b>';
+  if(cell.reviewMarks?.length)html+='<b class="review-mark">'+esc(cell.reviewMarks.join(''))+'</b>';
+  const candidate=candidates.find(p=>p.r===rr&&p.c===cc);
+  if(candidate)html+='<button type="button" class="candidate-marker" popovertarget="'+esc(candidate.id)+'" aria-label="'+esc(candidate.label)+'" title="'+esc(candidate.label)+'">?</button>';
+  html+=walls+'</span>';
+ }return html+'</div></div></div></div>';
+}
+function blockFigure(b){
+ const cells=Array.from({length:3},(_,r)=>Array.from({length:3},(_,c)=>{
+ const t=b.cells?.[r*3+c]||{},o={terrain:t.type?[t.type]:[],attach:t.attach};
+ o.wallKinds={};['u','d','l','r'].forEach((k,i)=>{o[k]=t.walls?.[i]===0?'空':t.walls?.[i]===1?'墙':'门';o.wallKinds[k]=t.walls?.[i];});return o;
+ }));
+ return '<figure style="margin:0;text-align:center" title="'+esc(b.name)+'">'+mapSvg(cells,3,null,true)+'<figcaption>'+esc(b.id)+'</figcaption></figure>';
+}
+function candidateFigures(blocks){return '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:12px">'+(blocks||[]).map(blockFigure).join('')+'</div>';}
+function selectedMaps(g){return (g?.report?.players||[]).flatMap(p=>{
+ const segments=p.segments||[];
+ return segments.length?segments.map(segment=>({p,segments,index:segment.index,board:segment.board})):[{p,segments,index:p.segment??0,board:p.board}];
+}).concat((g?.report?.historyMaps||[]).map(h=>({p:{id:h.player,self:h.player===g.self,segment:-1,ambiguities:1},segments:[],index:h.index,board:{...h.board,joined:[]},historicalAt:h.at})));}
+function mapGroups(rows){
+ const pending=[...rows],groups=[];
+ while(pending.length){const first=pending.shift(),group=[{...first,dr:0,dc:0}];
+  if(!first.historicalAt&&first.board?.verified&&!first.p.ambiguities)for(let i=pending.length-1;i>=0;i--){const row=pending[i];
+   const offset=first.board.joined?.find(j=>j.id===row.board?.frameId);
+   if(offset&&row.board.verified&&!row.p.ambiguities){group.push({...row,dr:offset.dr,dc:offset.dc});pending.splice(i,1);}
+  }groups.push(group);
+ }return groups;
+}
+function playerPanel(g){
+ const rows=selectedMaps(g);if(!rows.length)return '<small>等待地图…</small>';
+ const groups=mapGroups(rows);
+ return '<div class="maps'+(groups.length===1?' merged':'')+'">'+groups.map((group,groupIndex)=>{
+  const anchor=group[0].board||{};
+  if(group[0].historicalAt)group[0].p.id=String(group[0].p.id)+'（历史推断，未与当前对齐）';
+  const n=anchor.n||9,cells=structuredClone(anchor.cells||Array.from({length:n},()=>Array.from({length:n},()=>({})))),markers=[],births=[];
+  const mod=x=>(x%n+n)%n;
+  const selfRow=group.find(row=>row.p.self&&row.index===row.p.segment&&!row.historicalAt
+   &&row.board?.frameId===g.report.board?.frameId);
+  const candidates=selfRow?(g.report.candidateCases||[]).map(p=>{
+   const r=mod(p.position.r+selfRow.dr),c=mod(p.position.c+selfRow.dc);
+   const label=p.target+'号候选位置 · 第 '+(mod(r-(anchor.alignment?.rowOffset||0))+1)+' 行第 '+(mod(c-(anchor.alignment?.colOffset||0))+1)+' 列';
+   return {...p,r,c,label,id:(g.candidateKey||'live')+'-candidate-'+groupIndex+'-'+p.number};
+  }):[];
+  for(const row of group){const {p,index,dr,dc}=row,board=row.board||{};
+   if(p.self&&index===p.segment&&!row.historicalAt)for(const mark of g.reviewMarks||[]){
+    const dst=cells[mod(mark.r+dr)][mod(mark.c+dc)];(dst.reviewMarks??=[]).push(mark.symbol);
+   }
+   if(board.position)markers.push({id:p.id,r:mod(board.position.r+dr),c:mod(board.position.c+dc),label:p.id+'号',kind:p.status?.alive===false&&index===p.segment&&/捕捉|出局|炸|死亡/.test(p.status?.reason||'')?'corpse':p.status?.alive===false||index!==p.segment?'departure':'current',tentative:!!p.ambiguities});
+   (board.cells||[]).forEach((line,r)=>line.forEach((cell,c)=>{
+    const dst=cells[mod(r+dr)][mod(c+dc)];dst.visited ||=cell.visited;
+    dst.collisions={...dst.collisions,...cell.collisions};
+    if(cell.heartRoom&&cell.terrain?.length===1){dst.heartRoom=true;dst.terrain=cell.terrain;}
+    if(index===0&&cell.birth)births.push({id:p.id,r:mod(r+dr),c:mod(c+dc),label:p.id+'号出生'});
+   }));
+  }
+  for(const row of group){
+   const proof=row.board?.opponentProjection;
+   if(!row.p.self||row.index!==row.p.segment||row.historicalAt||!proof)continue;
+   if(markers.some(p=>p.id===proof.player&&p.kind==='current'))continue;
+   const use=row.board.projectionUse?' · '+row.board.projectionUse:'';
+   if(!candidates.some(p=>p.target===proof.player))for(const pos of proof.positions)markers.push({id:proof.player,r:mod(pos.r+row.dr),c:mod(pos.c+row.dc),kind:'current',tentative:proof.positions.length>1,projectionLabel:'第'+proof.round+'回合'+(proof.partial?'已公布步':'结束')+'的位置推断'+use});
+   if(proof.birth&&!births.some(b=>b.id===proof.player))births.push({id:proof.player,r:mod(proof.birth.r+row.dr),c:mod(proof.birth.c+row.dc),label:proof.player+'号推断出生'});
+  }
+  // Initial frames can remain aligned after a later teleport/view switch.
+  for(const row of rows){if(births.some(b=>b.id===row.p.id))continue;
+   const initial=row.segments.find(s=>s.index===0)?.board;
+   const offset=anchor.verified&&initial?.verified&&anchor.joined?.find(j=>j.id===initial.frameId);
+   if(offset)initial.cells.forEach((line,r)=>line.forEach((cell,c)=>{if(cell.birth)births.push({id:row.p.id,r:mod(r+offset.dr),c:mod(c+offset.dc),label:row.p.id+'号出生'});}));
+  }
+
+  const cases=candidates.map(p=>'<section class="candidate-popover" popover id="'+esc(p.id)+'"><button type="button" popovertarget="'+esc(p.id)+'" popovertargetaction="hide">关闭</button><h3>'+esc(p.label)+'</h3><p>假设 '+p.number+' / '+candidates.length+(p.round!=null?' · 第 '+p.round+' 回合'+(p.partial?'已公布行动':''):'')+'。'+esc(p.result)+'。</p>'+mapSvg(p.cells,p.n,null,false,'',p.alignment,p.markers,p.births)+'</section>').join('');
+  return '<section data-player-map="'+group.map(x=>x.p.id).join(',')+'"><div class="map-heading"><h2 title="'+(anchor.alignment?.confirmed?'3×3区块边界已确认':'3×3候选对齐，边界尚未确认')+'">'+(group.length>1?'已对齐 · ':'' )+group.map(x=>x.p.id+'号'+(x.p.self?'（本人）':'')+(x.segments.length>1?' · 第'+(x.index+1)+'段'+(x.index===0?' 初始视角':'')+(x.index===x.p.segment?' · 当前':' · 保留'):'' )).join(' / ')+'</h2></div>'+mapSvg(cells,n,null,false,'',anchor.alignment,markers,births,candidates)+cases+'</section>';
+ }).join('')+'</div>';
+}
+function detail(g){
+ const feedback=g?.messages?.filter(m=>/\[第\s*\d+\s*步\]/.test(m.text)).at(-1);
+ const received=feedback?'<section class="live-feedback"><h3>最新行动反馈</h3><p style="white-space:pre-wrap">'+esc(feedback.text)+'</p><small>收到于 '+esc(feedback.at)+' · 下方地图随推理完成更新</small></section>':'';
+ const d=g?.report?.decisionView;if(!d)return received+playerPanel(g);
+ return received+'<section class="live-decision" data-decision-key="'+esc(d.key)+'"><h2 class="action-title">'+esc(d.title)+'</h2><p><small>'+(!g.report.actionable?'最近一次推理 · ':'')+(d.sent?'已发送':'推理建议，尚未发送')+'</small></p><h3 style="font-size:15px">行动前已知地图</h3>'+playerPanel(g)+d.html+'</section>';
+}
+function saveFoldState(){
+ const root=$('detail').querySelector('[data-decision-key]');if(!root)return;
+ const saved={};root.querySelectorAll('details').forEach((el,i)=>saved[i]=el.open);views['fold:'+selected+':'+root.dataset.decisionKey]=saved;
+}
+function restoreFoldState(){
+ const root=$('detail').querySelector('[data-decision-key]');if(!root)return;
+ const saved=views['fold:'+selected+':'+root.dataset.decisionKey];if(!saved)return;
+ root.querySelectorAll('details').forEach((el,i)=>{if(Object.hasOwn(saved,i))el.open=saved[i];});
+}
+let pendingRefresh=false;
+async function tick(){if(busy){pendingRefresh=true;return;}busy=true;try{
+ const response=await fetch('/api/state');if(!response.ok)throw Error(response.status);state=await response.json();
+ const games=state.sessions||[];if(!games.some(g=>g.session===selected))selected=games[0]?.session;
+ $('session').innerHTML=games.map(g=>'<option value="'+esc(g.session)+'"'+(g.session===selected?' selected':'')+'>'+esc(g.settings?.modeName||'对局')+' · '+esc(g.session)+'</option>').join('');$('session').hidden=games.length<2;
+ $('connection').title='线上策略：'+(state.strategyVersion||'未报告');
+ $('policy').textContent=state.strategyVersion?.startsWith('objective-')?'目标驱动策略':'';
+ $('connection').textContent=state.connected?'已连接 · 红边＝碰撞':'未连接';
+ const openCandidate=typeof HTMLElement.prototype.showPopover==='function'&&$('detail').querySelector('.candidate-popover:popover-open');
+ if(!openCandidate){
+  saveFoldState();$('detail').innerHTML=detail(games.find(g=>g.session===selected));restoreFoldState();
+ }
+}catch(e){$('connection').textContent='刷新失败：'+e.message}finally{busy=false;if(pendingRefresh){pendingRefresh=false;setTimeout(tick,0);}}}
+
+$('detail').onchange=e=>{if(e.target.dataset.view!=null){views[selected+':'+e.target.dataset.view]=Number(e.target.value);$('detail').innerHTML=detail(state.sessions.find(g=>g.session===selected));}};
+$('session').onchange=e=>{saveFoldState();selected=e.target.value;$('detail').innerHTML='';tick();};tick();setInterval(tick,4000);
+const liveEvents=new EventSource('/api/events');liveEvents.onmessage=()=>tick();
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick();});
+</script></body></html>

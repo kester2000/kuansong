@@ -1,0 +1,1 @@
+Map CSS and classic PNG assets copied from D:/code/long_night_tools (chat.css, assets/lgtbot/classic). See vendor/long-night/NOTICE.md and LICENSE.lgtbot for original game provenance. Dashboard DOM adapter follows renderSingleBoard/blockPreview in chat.js; it omits editing controls.
