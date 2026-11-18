@@ -7,11 +7,11 @@ const number=(k,d,min,max)=>{const v=Number(flags[k]??d);if(!Number.isInteger(v)
 const games=number('games',20,1,100000),workers=number('workers',2,1,4),budgetMs=number('budget-ms',40,5,6000),seed=number('seed',710001,1,2147000000),gameMs=number('game-ms',180000,1000,600000);
 const scenario={mode:flags.mode||'TWIST',players:number('players',2,2,8),size:number('size',9,9,12),rounds:number('rounds',20,3,40),silent:flags.silent==='true',event:flags.event||'NONE',target:flags.target||'PREVIOUS',expandedPool:flags.expanded==='true',portalChaos:flags['portal-chaos']==='true',dark:flags.dark==='true',brawl:flags.brawl==='true',pointCapture:flags['point-capture']!=='false',deliberate:flags.deliberate==='true',bombs:number('bombs',0,0,3),boss:flags.boss?flags.boss.split(','):[],hidden:flags.hidden||'关闭',stopInfo:flags['stop-info']||'无'};
 require('./game.cjs').validateScenario(scenario);
-const out=path.resolve(flags.out||path.join(__dirname,'runs',new Date().toISOString().replace(/[:.]/g,'-')));
+const out=path.resolve(flags.out||path.join(__dirname,'../../../private/data/arena-runs',new Date().toISOString().replace(/[:.]/g,'-')));
 if(fs.existsSync(out))throw Error('Use a new output directory to keep versions and seeds separate');
 fs.mkdirSync(path.join(out,'games'),{recursive:true});
 const snapshot=path.join(out,'snapshot'),root=path.resolve(__dirname,'..');fs.mkdirSync(snapshot);
-for(const part of ['night-strategist','vendor','runtime','host.cjs','index.cjs','package.json'])fs.cpSync(path.join(root,part),path.join(snapshot,part),{recursive:true});
+for(const part of ['night-strategist','vendor','runtime','host.cjs','index.cjs'])fs.cpSync(path.join(root,part),path.join(snapshot,part),{recursive:true});
 fs.cpSync(__dirname,path.join(snapshot,'fast-arena'),{recursive:true,filter:p=>!p.includes(path.sep+'runs')&&!p.includes(path.sep+'source')});
 const hashes={};function hashFiles(dir){for(const e of fs.readdirSync(dir,{withFileTypes:true})){const p=path.join(dir,e.name);if(e.isDirectory())hashFiles(p);else hashes[path.relative(snapshot,p)]=crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');}}hashFiles(snapshot);
 const manifest={startedAt:new Date().toISOString(),revision:process.env.ARENA_REVISION||null,games,workers,budgetMs,gameMs,seed,scenario,policy:require('../night-strategist/suggest.cjs').VERSION,source:JSON.parse(fs.readFileSync(path.join(__dirname,'provenance.json'))),hashes,note:'Self-play is not a measurement of live win rate. Budget is per decision, see budgetMs. No forced stop fallback; unfinished games excluded from score averages.'};
