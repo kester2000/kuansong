@@ -1,0 +1,17 @@
+'use strict';
+const M=require('./math.cjs'),O=require('./observation.cjs');
+const opt=(s,k,d)=>Number(s.options[k]??d);
+function init(s){s.max=opt(s,'最大数字',100);s.hp=Array(s.players).fill(opt(s,'血量',10));s.crash=false;s.red=false;s.lastX=s.max*.25;return s;}
+function observe(s,o){const hp=O.numberedValues(O.row(o,/血量/),s.players);if(hp){s.hp=hp.map((v,i)=>v??(/出局/.test(O.row(o,/血量/)[i+1])?0:s.hp[i]));s.active=s.hp.map(x=>x>0);}const r=O.latestRoundRow(o);if(r){const values=O.numberedValues(r,s.players);O.addHistory(s,O.num(r[0]),values);if(O.num(r.at(-1))!=null)s.lastX=O.num(r.at(-1));}if(/(?:特殊)?撞车[：:]/.test(o.text))s.crash=true;if(/红心[：:]/.test(o.text))s.red=true;}
+function settle(s,choices){const active=choices.map((x,i)=>x!=null&&s.active[i]?i:-1).filter(i=>i>=0),n=active.length;if(!n)return {hp:[...s.hp],scores:Array(s.players).fill(0)};const x=Math.round(M.sum(active.map(i=>choices[i]))/n*.8*100)/100,crash=Array(s.players).fill(false),hp=[...s.hp],scores=Array(s.players).fill(0),onCrash=s.crash||(opt(s,'撞车',4)>0&&s.round>=opt(s,'撞车',4)),onRed=s.red||(opt(s,'红心',6)>0&&s.round>=opt(s,'红心',6));
+ if(onCrash)for(const i of active)for(const j of active)if(i<j&&Math.abs(choices[i]-choices[j])<=(n>2?opt(s,'撞车范围',0):0))crash[i]=crash[j]=true;
+ if(s.options.撞车伤害!=='关闭')active.forEach(i=>{if(crash[i])hp[i]--;});
+ const zeros=active.filter(i=>choices[i]===0),maxes=active.filter(i=>choices[i]===s.max&&!crash[i]);let winners=[],reds=[];
+ if(n<=3&&zeros.length&&maxes.length){if(s.options.淘汰规则!=='关闭')zeros.forEach(i=>{hp[i]=0;crash[i]=true;});winners=maxes;}
+ else {const best=Math.min(...active.filter(i=>!crash[i]).map(i=>Math.abs(choices[i]-x)));winners=active.filter(i=>!crash[i]&&Math.abs(Math.abs(choices[i]-x)-best)<.005);if(onRed){reds=winners.filter(i=>choices[i]===Math.round(x));winners=winners.filter(i=>!reds.includes(i));}}
+ active.forEach(i=>{if(winners.length||reds.length)hp[i]--;if(reds.length)hp[i]--;if(winners.includes(i)){hp[i]++;scores[i]++;}if(reds.includes(i)){hp[i]+=2;scores[i]+=2;}hp[i]=Math.max(0,hp[i]);if(hp[i]>0)scores[i]++;});return {hp,scores,x,winners,reds};
+}
+function opponent(s,i,random){const h=s.history[i],alive=s.active.filter(Boolean).length;if(alive<=3&&random()<.48)return M.weighted([0,1,s.max,Math.floor(s.max*2/3)],[1.3,2,2,.6],random);const r=random();if(h.length&&r<.3)return h[Math.floor(random()*h.length)];let center=s.round===1?s.max*.23:s.lastX*.8;if(h.length&&r<.65)center=(h.at(-1)*.35+center*.65);return M.clamp(Math.round(center+(random()+random()-1)*s.max*.15),0,s.max);}
+function decide(s,random=Math.random){if(!s.active[s.self])return null;const scenarios=Array.from({length:180},()=>s.active.map((a,i)=>a?opponent(s,i,random):null)),candidates=M.integers(s.max,140,[Math.round(s.lastX),Math.round(s.lastX*.8),Math.round(s.max*2/3)]),self=s.self;const choice=M.choose(candidates,a=>M.mean(scenarios.map(base=>{const choices=[...base];choices[self]=a;const result=settle(s,choices),alive=result.hp[self]>0,deadOthers=result.hp.filter((hp,i)=>i!==self&&s.active[i]&&hp===0).length;return (alive?0:-60)+(result.hp[self]-s.hp[self])*8+result.scores[self]*1.5+deadOthers*5-M.mean(result.hp.filter((_,i)=>i!==self&&s.active[i]))*.4;})),{random,temperature:.09});return O.command(choice.action,'private','按历史分布模拟撞车、红心和淘汰风险');}
+function validate(s,a){return a.channel==='private'&&/^\d+$/.test(a.text)&&+a.text>=0&&+a.text<=s.max&&s.active[s.self];}
+module.exports={id:'beauty_vote',name:'美人投票',init,observe,decide,validate,settle};

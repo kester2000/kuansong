@@ -1,0 +1,12 @@
+'use strict';
+const {equilibrium,weighted,clamp}=require('./math.cjs'),{command}=require('./observation.cjs');
+function init(s){s.k=Number(s.options.数字种类??6);s.limit=Number(s.options.失败数量??3);s.counts=Array.from({length:2},()=>Array(s.k).fill(0));s.revealedRounds=[];s.truth=[2,2];return s;}
+function observe(s,o){const claim=o.text.match(/提问数字\s*([1-6])/);if(claim)s.claim=+claim[1];const question=o.text.match(/请\s*\[(\d+)号[^\]]*\]\s*设置数字/);if(question)s.questioner=+question[1];const guess=o.text.match(/请\s*\[(\d+)号[^\]]*\]\s*选择[「“]相信/);if(guess)s.questioner=1-Number(guess[1]);const result=o.text.match(/实际数字为\s*([1-6])[，,][\s\S]*?玩家\s*\[(\d+)号[^\]]*\]\s*获得数字/);if(result&&!s.revealedRounds.includes(s.round)){const actual=+result[1],loser=+result[2];s.counts[loser][actual-1]++;s.revealedRounds.push(s.round);s.truth[actual===s.claim?0:1]++;}}
+function lost(s,counts){return counts.some(n=>n>=s.limit)||counts.every(n=>n>0);}
+function risk(s,c){if(lost(s,c))return 20;return c.reduce((a,n)=>a+n*n,0)+c.filter(n=>n>0).length**2*.35;}
+function payoff(s,q,actual,claim,doubt){const good=doubt!==(actual===claim),loser=good?q:1-q,counts=s.counts.map(a=>a.slice());counts[loser][actual-1]++;if(lost(s,counts[loser]))return loser===q?-1:1;return clamp((risk(s,counts[1-q])-risk(s,counts[q]))/24,-.9,.9);}
+function strategy(s,q,claim){const actuals=Array.from({length:s.k},(_,i)=>i+1);return {actuals,...equilibrium(actuals.map(a=>[payoff(s,q,a,claim,false),payoff(s,q,a,claim,true)]),1000)};}
+function decide(s,random=Math.random){if(s.questioner==null)return null;if(s.questioner===s.self){if(!/设置数字/.test(s.phase))return null;const choices=Array.from({length:s.k},(_,i)=>({claim:i+1,...strategy(s,s.self,i+1)})),best=Math.max(...choices.map(x=>x.value)),near=choices.filter(x=>x.value>=best-.025),c=near[Math.floor(random()*near.length)],actual=weighted(c.actuals,c.p,random);return command(`${actual} ${c.claim}`,'private','按双方数字危险度选择真假比例');}
+ if(!/猜测/.test(s.phase)||!s.claim)return null;const x=strategy(s,s.questioner,s.claim),guess=weighted([false,true],x.q,random);return command(guess?'质疑':'相信','private','根据信息相同的混合策略平衡质疑风险');}
+function validate(s,a){if(s.questioner===s.self){const m=a.text.match(/^(\d+) (\d+)$/);return a.channel==='private'&&m&&[+m[1],+m[2]].every(x=>x>=1&&x<=s.k)&&/设置数字/.test(s.phase);}return /^(质疑|相信)$/.test(a.text)&&/猜测/.test(s.phase);}
+module.exports={id:'lie',name:'LIE',init,observe,decide,validate,payoff,lost,strategy};

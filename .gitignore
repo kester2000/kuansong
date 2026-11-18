@@ -1,0 +1,10 @@
+/private/
+/cache/
+/node_modules/
+**/node_modules/
+*.pem
+*.key
+*.pfx
+*.p12
+.env
+.env.*
